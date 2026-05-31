@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>智驾测试记录仪</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">辅助驾驶路测</p>
+          <h1>智驾测试记录仪</h1>
+        </div>
+        <div class="session-pill" id="recordingBadge">待机</div>
+      </header>
+
+      <main>
+        <section class="control-strip" aria-label="记录控制">
+          <button class="primary-action" id="recordButton" type="button">
+            <span class="button-icon" aria-hidden="true">●</span>
+            <span id="recordButtonText">开始记录</span>
+          </button>
+          <button id="permissionButton" type="button">授权传感器</button>
+          <button id="markerButton" type="button">标记</button>
+          <button id="demoButton" type="button">演示</button>
+          <button id="exportCsvButton" type="button">CSV</button>
+          <button id="exportJsonButton" type="button">JSON</button>
+          <button class="danger-action" id="clearButton" type="button">清空</button>
+        </section>
+
+        <section class="status-grid" aria-label="实时状态">
+          <div class="stat-tile">
+            <span>时长</span>
+            <strong id="elapsedValue">00:00.0</strong>
+          </div>
+          <div class="stat-tile">
+            <span>速度</span>
+            <strong id="speedValue">-- km/h</strong>
+          </div>
+          <div class="stat-tile">
+            <span>样本</span>
+            <strong id="sampleValue">0</strong>
+          </div>
+          <div class="stat-tile">
+            <span>定位</span>
+            <strong id="gpsValue">未连接</strong>
+          </div>
+        </section>
+
+        <section class="workspace-grid">
+          <article class="panel instrument-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">车辆坐标</p>
+                <h2>圆盘加速度计</h2>
+              </div>
+              <span class="signal-dot" id="motionDot" title="运动传感器状态"></span>
+            </div>
+            <div class="gauge-wrap">
+              <canvas id="accelGauge" width="520" height="520" aria-label="加速度圆盘"></canvas>
+            </div>
+            <div class="axis-readout">
+              <div>
+                <span>纵向</span>
+                <strong id="longitudinalValue">0.00 g</strong>
+              </div>
+              <div>
+                <span>横向</span>
+                <strong id="lateralValue">0.00 g</strong>
+              </div>
+              <div>
+                <span>垂向</span>
+                <strong id="verticalValue">0.00 g</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel map-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">GPS 轨迹</p>
+                <h2>小地图</h2>
+              </div>
+              <span id="accuracyValue">-- m</span>
+            </div>
+            <canvas id="miniMap" width="720" height="420" aria-label="行驶轨迹小地图"></canvas>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">时间序列</p>
+                <h2>速度与加速度</h2>
+              </div>
+              <span id="eventBadge">无事件</span>
+            </div>
+            <canvas id="trendChart" width="720" height="320" aria-label="速度与加速度趋势"></canvas>
+          </article>
+
+          <article class="panel calibration-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">传感器矫正</p>
+                <h2>手机安装校准</h2>
+              </div>
+              <span id="calibrationState">未校准</span>
+            </div>
+            <div class="calibration-actions">
+              <label class="select-field" for="mountDirection">
+                <span>手机朝向</span>
+                <select id="mountDirection">
+                  <option value="top">顶端朝车头</option>
+                  <option value="right">右侧朝车头</option>
+                  <option value="bottom">底端朝车头</option>
+                  <option value="left">左侧朝车头</option>
+                </select>
+              </label>
+              <button id="staticCalibrateButton" type="button">静止校准</button>
+              <button id="forwardCalibrateButton" type="button">直线校准</button>
+            </div>
+            <div class="calibration-meter">
+              <div>
+                <span>重力矫正</span>
+                <strong id="gravityQuality">--</strong>
+              </div>
+              <div>
+                <span>前向矫正</span>
+                <strong id="forwardQuality">--</strong>
+              </div>
+              <div>
+                <span>噪声</span>
+                <strong id="noiseValue">--</strong>
+              </div>
+            </div>
+            <p class="quiet-note" id="calibrationHint">车辆静止并固定手机后执行静止校准；直线行驶时可进一步校准前后方向。</p>
+          </article>
+
+          <article class="panel event-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">判定结果</p>
+                <h2>驾驶事件</h2>
+              </div>
+              <span id="eventCount">0</span>
+            </div>
+            <div class="event-list" id="eventList" aria-live="polite"></div>
+          </article>
+
+          <article class="panel sample-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">最近数据</p>
+                <h2>采样流</h2>
+              </div>
+              <span id="lastSampleTime">--</span>
+            </div>
+            <div class="sample-table" role="table" aria-label="最近采样">
+              <div class="table-row table-head" role="row">
+                <span role="columnheader">时间</span>
+                <span role="columnheader">速度</span>
+                <span role="columnheader">纵向</span>
+                <span role="columnheader">横向</span>
+              </div>
+              <div id="sampleRows"></div>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
