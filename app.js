@@ -3,6 +3,9 @@ const MAX_SAMPLES = 36000;
 const DRAW_WINDOW_MS = 60000;
 const LOG_INTERVAL_MS = 100;
 const EVENT_COOLDOWN_MS = 1400;
+const GPS_STALE_MS = 3500;
+const GPS_DELTA_MAX_ACCURACY_M = 35;
+const GPS_MAX_REASONABLE_ACCEL = 8;
 
 const els = {
   recordButton: document.querySelector("#recordButton"),
@@ -16,8 +19,10 @@ const els = {
   recordingBadge: document.querySelector("#recordingBadge"),
   elapsedValue: document.querySelector("#elapsedValue"),
   speedValue: document.querySelector("#speedValue"),
+  speedSourceValue: document.querySelector("#speedSourceValue"),
   sampleValue: document.querySelector("#sampleValue"),
   gpsValue: document.querySelector("#gpsValue"),
+  gpsCoordValue: document.querySelector("#gpsCoordValue"),
   accuracyValue: document.querySelector("#accuracyValue"),
   eventBadge: document.querySelector("#eventBadge"),
   eventCount: document.querySelector("#eventCount"),
@@ -35,6 +40,9 @@ const els = {
   gravityQuality: document.querySelector("#gravityQuality"),
   forwardQuality: document.querySelector("#forwardQuality"),
   noiseValue: document.querySelector("#noiseValue"),
+  pitchValue: document.querySelector("#pitchValue"),
+  rollValue: document.querySelector("#rollValue"),
+  headingOffsetValue: document.querySelector("#headingOffsetValue"),
   calibrationHint: document.querySelector("#calibrationHint"),
   accelGauge: document.querySelector("#accelGauge"),
   miniMap: document.querySelector("#miniMap"),
@@ -61,7 +69,18 @@ const state = {
     speed: null,
     lat: null,
     lon: null,
-    accuracy: null
+    accuracy: null,
+    altitude: null,
+    altitudeAccuracy: null,
+    heading: null,
+    speedSource: "waiting",
+    gpsSpeedRaw: null,
+    gpsTimestamp: null
+  },
+  gps: {
+    speedFiltered: null,
+    speedSource: "waiting",
+    speedRaw: null
   },
   vehicle: {
     longitudinal: 0,
@@ -78,6 +97,9 @@ const state = {
     vertical: [0, 0, 1],
     bias: [0, 0, 0],
     noise: null,
+    pitch: null,
+    roll: null,
+    headingOffset: null,
     staticReady: false,
     forwardReady: false,
     forwardQuality: 0
@@ -174,6 +196,28 @@ function rebuildAxes(forwardSeed = mountDirectionVector()) {
   state.calibration.forward = forward;
   state.calibration.lateral = lateral;
   state.calibration.vertical = vertical;
+  updateCalibrationAngles();
+}
+
+function updateCalibrationAngles() {
+  if (!state.calibration.staticReady) {
+    state.calibration.pitch = null;
+    state.calibration.roll = null;
+    state.calibration.headingOffset = null;
+    return;
+  }
+
+  const gravity = normalize(state.calibration.gravity, [0, 0, 1]);
+  state.calibration.pitch = (Math.atan2(-gravity[1], Math.hypot(gravity[0], gravity[2])) * 180) / Math.PI;
+  state.calibration.roll = (Math.atan2(gravity[0], gravity[2]) * 180) / Math.PI;
+
+  const vertical = state.calibration.vertical;
+  const baseForward = normalize(projectToPlane(mountDirectionVector(), vertical), state.calibration.forward);
+  const signed =
+    (Math.atan2(dot(cross(baseForward, state.calibration.forward), vertical), dot(baseForward, state.calibration.forward)) *
+      180) /
+    Math.PI;
+  state.calibration.headingOffset = signed;
 }
 
 function formatDuration(ms) {
@@ -195,6 +239,32 @@ function kmh(ms) {
 
 function formatSpeed(speed) {
   return Number.isFinite(speed) ? `${kmh(speed).toFixed(1)} km/h` : "-- km/h";
+}
+
+function formatSpeedSource(source) {
+  switch (source) {
+    case "gps":
+      return "手机 GPS 速度";
+    case "gps_delta":
+      return "GPS 坐标差分";
+    case "gps_stationary":
+      return "GPS 静止过滤";
+    case "demo":
+      return "演示数据";
+    case "waiting":
+      return "等待 GPS";
+    default:
+      return "GPS测速";
+  }
+}
+
+function formatCoord(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return "--, --";
+  return `${lat.toFixed(8)}, ${lon.toFixed(8)}`;
+}
+
+function formatAngle(value) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}°` : "--";
 }
 
 function formatG(ms2) {
@@ -293,30 +363,48 @@ function handleMotion(event) {
 }
 
 function handlePosition(position) {
-  const { latitude, longitude, accuracy, speed } = position.coords;
+  const { latitude, longitude, accuracy, altitude, altitudeAccuracy, heading, speed } = position.coords;
   const timestamp = position.timestamp || Date.now();
   const current = {
     lat: latitude,
     lon: longitude,
     accuracy,
+    altitude: Number.isFinite(altitude) ? altitude : null,
+    altitudeAccuracy: Number.isFinite(altitudeAccuracy) ? altitudeAccuracy : null,
+    heading: Number.isFinite(heading) ? heading : null,
     timestamp,
-    speed: Number.isFinite(speed) ? speed : null
+    gpsSpeed: Number.isFinite(speed) && speed >= 0 ? speed : null,
+    speed: null,
+    speedSource: "waiting"
   };
 
-  if (!Number.isFinite(current.speed) && state.previousPosition) {
-    const meters = distanceMeters(state.previousPosition, current);
-    const dt = (timestamp - state.previousPosition.timestamp) / 1000;
-    if (dt > 0.2 && dt < 20) current.speed = meters / dt;
-  }
+  updateGpsSpeed(current);
 
   state.raw.lat = latitude;
   state.raw.lon = longitude;
   state.raw.accuracy = accuracy;
+  state.raw.altitude = current.altitude;
+  state.raw.altitudeAccuracy = current.altitudeAccuracy;
+  state.raw.heading = current.heading;
   state.raw.speed = current.speed;
+  state.raw.speedSource = current.speedSource;
+  state.raw.gpsSpeedRaw = current.gpsSpeedRaw;
+  state.raw.gpsTimestamp = timestamp;
   state.lastGpsAt = now();
 
   if (state.recording) {
-    state.track.push({ lat: latitude, lon: longitude, timestamp, speed: current.speed, accuracy });
+    state.track.push({
+      lat: latitude,
+      lon: longitude,
+      timestamp,
+      speed: current.speed,
+      speedSource: current.speedSource,
+      gpsSpeed: current.gpsSpeedRaw,
+      accuracy,
+      altitude: current.altitude,
+      altitudeAccuracy: current.altitudeAccuracy,
+      heading: current.heading
+    });
     if (state.track.length > 5000) state.track.shift();
   }
 
@@ -339,6 +427,15 @@ function ingestDemoFrame(frame) {
   state.raw.lat = frame.lat;
   state.raw.lon = frame.lon;
   state.raw.accuracy = frame.accuracy;
+  state.raw.altitude = null;
+  state.raw.altitudeAccuracy = null;
+  state.raw.heading = null;
+  state.raw.speedSource = "demo";
+  state.raw.gpsSpeedRaw = frame.speed;
+  state.raw.gpsTimestamp = timestamp;
+  state.gps.speedFiltered = frame.speed;
+  state.gps.speedSource = "demo";
+  state.gps.speedRaw = frame.speed;
 
   const corrected = sub(frame.linear, state.calibration.bias);
   const longitudinal = dot(corrected, state.calibration.forward);
@@ -357,7 +454,12 @@ function ingestDemoFrame(frame) {
       lon: frame.lon,
       timestamp,
       speed: frame.speed,
-      accuracy: frame.accuracy
+      speedSource: "demo",
+      gpsSpeed: frame.speed,
+      accuracy: frame.accuracy,
+      altitude: null,
+      altitudeAccuracy: null,
+      heading: null
     });
   }
 
@@ -375,6 +477,55 @@ function distanceMeters(a, b) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * radius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function updateGpsSpeed(sample) {
+  let measuredSpeed = sample.gpsSpeed;
+  let source = Number.isFinite(measuredSpeed) ? "gps" : "waiting";
+
+  if (!Number.isFinite(measuredSpeed) && state.previousPosition) {
+    const dt = (sample.timestamp - state.previousPosition.timestamp) / 1000;
+    const accuracyOk =
+      Number.isFinite(sample.accuracy) &&
+      Number.isFinite(state.previousPosition.accuracy) &&
+      sample.accuracy <= GPS_DELTA_MAX_ACCURACY_M &&
+      state.previousPosition.accuracy <= GPS_DELTA_MAX_ACCURACY_M;
+
+    if (dt >= 0.5 && dt <= 10 && accuracyOk) {
+      const meters = distanceMeters(state.previousPosition, sample);
+      const noiseFloor = clamp((sample.accuracy + state.previousPosition.accuracy) * 0.22, 2.2, 12);
+      if (meters <= noiseFloor) {
+        measuredSpeed = 0;
+        source = "gps_stationary";
+      } else {
+        measuredSpeed = (meters - noiseFloor) / dt;
+        source = "gps_delta";
+      }
+    }
+  }
+
+  if (Number.isFinite(measuredSpeed) && Number.isFinite(state.gps.speedFiltered)) {
+    const dt = state.previousPosition ? (sample.timestamp - state.previousPosition.timestamp) / 1000 : 1;
+    if (dt > 0) {
+      const delta = measuredSpeed - state.gps.speedFiltered;
+      const maxDelta = GPS_MAX_REASONABLE_ACCEL * dt;
+      measuredSpeed = state.gps.speedFiltered + clamp(delta, -maxDelta, maxDelta);
+    }
+  }
+
+  if (Number.isFinite(measuredSpeed)) {
+    const alpha = source === "gps" ? 0.45 : 0.28;
+    state.gps.speedFiltered = Number.isFinite(state.gps.speedFiltered)
+      ? state.gps.speedFiltered * (1 - alpha) + measuredSpeed * alpha
+      : measuredSpeed;
+    if (state.gps.speedFiltered < 0.25 && source !== "gps") state.gps.speedFiltered = 0;
+  }
+
+  state.gps.speedRaw = Number.isFinite(sample.gpsSpeed) ? sample.gpsSpeed : measuredSpeed;
+  state.gps.speedSource = source;
+  sample.gpsSpeedRaw = state.gps.speedRaw;
+  sample.speed = Number.isFinite(state.gps.speedFiltered) ? state.gps.speedFiltered : null;
+  sample.speedSource = source;
 }
 
 function updateSpeedDerivative(sample) {
@@ -537,9 +688,15 @@ function logSample(timestamp, motionTime) {
     vertical: state.vehicle.vertical,
     total: state.vehicle.total,
     speed: state.raw.speed,
+    speedSource: state.raw.speedSource,
+    gpsSpeedRaw: state.raw.gpsSpeedRaw,
     lat: state.raw.lat,
     lon: state.raw.lon,
-    accuracy: state.raw.accuracy
+    accuracy: state.raw.accuracy,
+    altitude: state.raw.altitude,
+    altitudeAccuracy: state.raw.altitudeAccuracy,
+    heading: state.raw.heading,
+    gpsTimestamp: state.raw.gpsTimestamp
   };
 
   state.samples.push(sample);
@@ -579,6 +736,7 @@ function addEvent(type, intensity = 0, timestamp = Date.now()) {
     elapsedMs: elapsedMs(),
     intensity,
     speed: state.raw.speed,
+    speedSource: state.raw.speedSource,
     lat: state.raw.lat,
     lon: state.raw.lon
   };
@@ -615,10 +773,16 @@ function updateEvents() {
 
 function updateStatus() {
   const elapsed = elapsedMs();
+  const gpsAge = now() - state.lastGpsAt;
+  const gpsOnline = gpsAge < GPS_STALE_MS && Number.isFinite(state.raw.lat) && Number.isFinite(state.raw.lon);
   els.elapsedValue.textContent = formatDuration(elapsed);
   els.speedValue.textContent = formatSpeed(state.raw.speed);
+  els.speedSourceValue.textContent = formatSpeedSource(state.raw.speedSource);
   els.sampleValue.textContent = String(state.samples.length);
-  els.gpsValue.textContent = now() - state.lastGpsAt < 2500 ? "在线" : "等待";
+  els.gpsValue.textContent = gpsOnline ? "已定位" : "等待";
+  els.gpsValue.classList.toggle("gps-lock", gpsOnline);
+  els.gpsValue.classList.toggle("gps-waiting", !gpsOnline);
+  els.gpsCoordValue.textContent = formatCoord(state.raw.lat, state.raw.lon);
   els.accuracyValue.textContent = Number.isFinite(state.raw.accuracy)
     ? `±${Math.round(state.raw.accuracy)} m`
     : "-- m";
@@ -643,6 +807,9 @@ function updateCalibrationStatus() {
   els.gravityQuality.textContent = gravityText;
   els.forwardQuality.textContent = forwardText;
   els.noiseValue.textContent = Number.isFinite(cal.noise) ? `${cal.noise.toFixed(2)} m/s²` : "--";
+  els.pitchValue.textContent = formatAngle(cal.pitch);
+  els.rollValue.textContent = formatAngle(cal.roll);
+  els.headingOffsetValue.textContent = formatAngle(cal.headingOffset);
 
   if (cal.staticReady && cal.forwardReady) {
     els.calibrationState.textContent = "双重校准";
@@ -881,9 +1048,15 @@ function exportCsv() {
     "timestamp",
     "elapsed_ms",
     "speed_mps",
+    "speed_source",
+    "gps_speed_raw_mps",
+    "gps_timestamp",
     "lat",
     "lon",
     "accuracy_m",
+    "altitude_m",
+    "altitude_accuracy_m",
+    "heading_deg",
     "raw_x",
     "raw_y",
     "raw_z",
@@ -897,9 +1070,15 @@ function exportCsv() {
       new Date(sample.timestamp).toISOString(),
       Math.round(sample.elapsedMs),
       numberCell(sample.speed),
-      numberCell(sample.lat, 7),
-      numberCell(sample.lon, 7),
+      sample.speedSource || "",
+      numberCell(sample.gpsSpeedRaw),
+      sample.gpsTimestamp ? new Date(sample.gpsTimestamp).toISOString() : "",
+      numberCell(sample.lat, 8),
+      numberCell(sample.lon, 8),
       numberCell(sample.accuracy, 2),
+      numberCell(sample.altitude, 2),
+      numberCell(sample.altitudeAccuracy, 2),
+      numberCell(sample.heading, 2),
       numberCell(sample.rawX),
       numberCell(sample.rawY),
       numberCell(sample.rawZ),
@@ -914,7 +1093,12 @@ function exportCsv() {
 
 function exportJson() {
   const payload = {
+    schema: "adas-recorder-session-v2",
     exportedAt: new Date().toISOString(),
+    app: {
+      name: "智驾测试记录仪",
+      purpose: "mobile-capture-for-hud-video"
+    },
     calibration: state.calibration,
     samples: state.samples,
     events: state.events.slice().reverse(),
