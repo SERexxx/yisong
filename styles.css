@@ -189,7 +189,8 @@ canvas {
 
 .stat-tile span,
 .axis-readout span,
-.calibration-meter span {
+.calibration-meter span,
+.angle-readout span {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
@@ -204,6 +205,27 @@ canvas {
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stat-tile small {
+  display: block;
+  min-height: 1.15rem;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gps-lock {
+  color: var(--green);
+}
+
+.gps-waiting {
+  color: var(--amber);
 }
 
 .workspace-grid {
@@ -265,7 +287,8 @@ canvas {
 }
 
 .axis-readout,
-.calibration-meter {
+.calibration-meter,
+.angle-readout {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
@@ -274,20 +297,30 @@ canvas {
 }
 
 .axis-readout div,
-.calibration-meter div {
+.calibration-meter div,
+.angle-readout div {
   min-width: 0;
   padding: 12px;
   background: var(--surface);
 }
 
 .axis-readout strong,
-.calibration-meter strong {
+.calibration-meter strong,
+.angle-readout strong {
   display: block;
   margin-top: 4px;
   overflow: hidden;
   font-size: 1.05rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.angle-readout span {
+  font-size: 0.72rem;
+}
+
+.angle-readout strong {
+  font-size: 0.92rem;
 }
 
 .signal-dot {
@@ -481,7 +514,8 @@ canvas {
   }
 
   .axis-readout,
-  .calibration-meter {
+  .calibration-meter,
+  .angle-readout {
     grid-template-columns: 1fr;
   }
 
