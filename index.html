@@ -40,6 +40,7 @@
           <div class="stat-tile">
             <span>速度</span>
             <strong id="speedValue">-- km/h</strong>
+            <small id="speedSourceValue">GPS测速</small>
           </div>
           <div class="stat-tile">
             <span>样本</span>
@@ -48,6 +49,7 @@
           <div class="stat-tile">
             <span>定位</span>
             <strong id="gpsValue">未连接</strong>
+            <small id="gpsCoordValue">--, --</small>
           </div>
         </section>
 
@@ -134,6 +136,20 @@
               <div>
                 <span>噪声</span>
                 <strong id="noiseValue">--</strong>
+              </div>
+            </div>
+            <div class="angle-readout" aria-label="手机姿态角度">
+              <div>
+                <span>俯仰</span>
+                <strong id="pitchValue">--</strong>
+              </div>
+              <div>
+                <span>横滚</span>
+                <strong id="rollValue">--</strong>
+              </div>
+              <div>
+                <span>前向偏角</span>
+                <strong id="headingOffsetValue">--</strong>
               </div>
             </div>
             <p class="quiet-note" id="calibrationHint">车辆静止并固定手机后执行静止校准；直线行驶时可进一步校准前后方向。</p>
